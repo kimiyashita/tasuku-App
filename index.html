@@ -12,38 +12,36 @@
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&display=swap');
+        body { font-family: 'Noto Sans JP', sans-serif; background: #F8FAFC; }
+        .task-row:hover .delete-btn { opacity: 1; }
+    </style>
 </head>
-<body class="bg-slate-50 text-slate-900">
+<body>
     <div id="root"></div>
 
     <script type="text/babel">
         const { useState, useEffect, useMemo, useRef } = React;
 
-        // --- あなたの設定をすべて反映済み ---
+        // 設定情報
         const firebaseConfig = {
             apiKey: "AIzaSyBXDp6iEudhalJGQE-cxOZw4-scYvlnAjE",
             authDomain: "tasuku-app-2d0cd.firebaseapp.com",
             projectId: "tasuku-app-2d0cd",
             storageBucket: "tasuku-app-2d0cd.firebasestorage.app",
             messagingSenderId: "576034343714",
-            appId: "1:576034343714:web:d4556461f0a3c52453337b",
-            measurementId: "G-38W947XG7V"
+            appId: "1:576034343714:web:d4556461f0a3c52453337b"
         };
-        
         const GEMINI_API_KEY = "AIzaSyBuCdxrtXozaTUJOItw3J-A9VCRLTFzr5s";
         const appId = 'tasuku-App-v1';
-        // ------------------------------
 
-        // Firebase初期化
         if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
         const auth = firebase.auth();
 
-        // アイコン表示用コンポーネント
         const LucideIcon = ({ name, className = "w-5 h-5" }) => {
-            useEffect(() => { 
-                if (typeof lucide !== 'undefined') lucide.createIcons(); 
-            }, [name]);
+            useEffect(() => { lucide.createIcons(); }, [name]);
             return <i data-lucide={name} className={className}></i>;
         };
 
@@ -51,56 +49,118 @@
             const [user, setUser] = useState(null);
             const [tasks, setTasks] = useState([]);
             const [userInput, setUserInput] = useState("");
-            const [advice, setAdvice] = useState("Kiiさん、あなたのタスクを待っています...");
+            const [advice, setAdvice] = useState("Kiiさん、タスクを分析しています...");
+            const [isProcessing, setIsProcessing] = useState(false);
 
             useEffect(() => {
-                // 匿名認証でログイン
                 auth.signInAnonymously().catch(console.error);
                 auth.onAuthStateChanged(u => setUser(u));
             }, []);
 
+            useEffect(() => {
+                if (!user) return;
+                return db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks')
+                    .onSnapshot(snap => {
+                        setTasks(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                    });
+            }, [user]);
+
+            // タスク反映ロジック（Gemini AI使用）
+            const handleReflect = async () => {
+                if (!userInput.trim() || !user) return;
+                setIsProcessing(true);
+                try {
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: [{ parts: [{ text: `以下の入力をタスク（text, project）としてJSON形式で解析して: "${userInput}"` }] }],
+                            generationConfig: { responseMimeType: "application/json" }
+                        })
+                    });
+                    const resData = await response.json();
+                    const result = JSON.parse(resData.candidates[0].content.parts[0].text);
+                    
+                    await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks').add({
+                        text: result.text || userInput,
+                        project: result.project || "未分類",
+                        completed: false,
+                        isToday: true,
+                        createdAt: new Date().toISOString()
+                    });
+                    setUserInput("");
+                } catch (e) { console.error(e); }
+                setIsProcessing(false);
+            };
+
+            const toggleTask = (id, current) => {
+                db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks').doc(id).update({ completed: !current });
+            };
+
+            const deleteTask = (id) => {
+                db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks').doc(id).delete();
+            };
+
             return (
-                <div className="min-h-screen p-6 md:p-12 max-w-3xl mx-auto font-sans">
+                <div className="min-h-screen p-6 md:p-12 max-w-3xl mx-auto">
                     <header className="flex justify-between items-center mb-10">
-                        <div className="flex items-center gap-2 text-indigo-600">
-                            <LucideIcon name="cloud" className="w-8 h-8" />
-                            <h1 className="text-3xl font-black italic text-slate-900 tracking-tighter">
-                                Kii's <span className="text-indigo-600">Secretary</span>
-                            </h1>
+                        <div className="flex items-center gap-2">
+                            <LucideIcon name="cloud" className="text-indigo-600 w-8 h-8" />
+                            <h1 className="text-3xl font-black italic">Kii's Secretary</h1>
                         </div>
-                        <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm text-slate-400">
-                            <LucideIcon name="settings" />
-                        </div>
+                        <LucideIcon name="settings" className="text-slate-400" />
                     </header>
 
-                    <div className="bg-indigo-600 rounded-[40px] p-8 text-white shadow-xl mb-10 relative overflow-hidden transition-all hover:scale-[1.01]">
-                        <div className="relative z-10">
-                            <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.3em] opacity-70 mb-4">
-                                <LucideIcon name="lightbulb" className="w-4 h-4" /> Secretary Advice
-                            </div>
-                            <p className="text-xl font-bold leading-relaxed">{advice}</p>
+                    {/* アドバイス */}
+                    <div className="bg-indigo-600 rounded-[40px] p-8 text-white shadow-xl mb-10">
+                        <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest opacity-70 mb-4">
+                            <LucideIcon name="lightbulb" className="w-4 h-4" /> Secretary Advice
                         </div>
+                        <p className="text-xl font-bold">{advice}</p>
                     </div>
 
-                    <div className="bg-white rounded-[40px] p-10 border border-slate-100 shadow-sm mb-12 focus-within:ring-2 focus-within:ring-indigo-400 transition-all">
+                    {/* 入力欄 */}
+                    <div className="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm mb-12">
                         <textarea 
                             value={userInput}
                             onChange={(e) => setUserInput(e.target.value)}
-                            className="w-full h-32 border-none focus:ring-0 text-2xl font-medium resize-none placeholder:text-slate-200"
+                            className="w-full h-32 border-none focus:ring-0 text-2xl resize-none"
                             placeholder="今日やることを教えてください..."
                         />
-                        <div className="flex justify-end mt-6">
-                            <button className="bg-slate-900 text-white px-10 py-4 rounded-full font-black text-sm flex items-center gap-3 hover:bg-indigo-600 active:scale-95 transition-all shadow-lg">
-                                <LucideIcon name="send" className="w-4 h-4 text-indigo-400" /> 反映する
+                        <div className="flex justify-end mt-4">
+                            <button 
+                                onClick={handleReflect}
+                                disabled={isProcessing}
+                                className="bg-slate-900 text-white px-10 py-4 rounded-full font-black flex items-center gap-3 shadow-lg active:scale-95 transition-all"
+                            >
+                                {isProcessing ? "解析中..." : <React.Fragment><LucideIcon name="send" className="w-4 h-4" /> 反映する</React.Fragment>}
                             </button>
                         </div>
                     </div>
 
-                    <div className="flex items-center justify-center gap-4 text-slate-300">
-                        <div className="h-px bg-slate-200 flex-1"></div>
-                        <LucideIcon name="zap" className="w-4 h-4 fill-slate-200" />
-                        <div className="h-px bg-slate-200 flex-1"></div>
-                    </div>
+                    {/* 今日のやることリスト */}
+                    <section className="mb-12">
+                        <div className="flex items-center gap-3 mb-6">
+                            <LucideIcon name="target" className="text-amber-500" />
+                            <h2 className="text-2xl font-black italic">今日のやること</h2>
+                        </div>
+                        <div className="space-y-4">
+                            {tasks.filter(t => t.isToday).map(t => (
+                                <div key={t.id} className="task-row flex items-start gap-4 p-5 bg-white border border-slate-100 rounded-[24px] shadow-sm">
+                                    <button onClick={() => toggleTask(t.id, t.completed)} className="mt-1">
+                                        <LucideIcon name={t.completed ? "check-circle-2" : "circle"} className={t.completed ? "text-emerald-500" : "text-slate-300"} />
+                                    </button>
+                                    <div className="flex-1">
+                                        <p className={`text-lg font-bold ${t.completed ? 'line-through text-slate-300' : 'text-slate-800'}`}>{t.text}</p>
+                                        <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-tighter bg-indigo-50 px-2 py-0.5 rounded">{t.project}</span>
+                                    </div>
+                                    <button onClick={() => deleteTask(t.id)} className="delete-btn opacity-0 text-slate-200 hover:text-rose-500 transition-all">
+                                        <LucideIcon name="trash-2" className="w-5 h-5" />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
                 </div>
             );
         };
