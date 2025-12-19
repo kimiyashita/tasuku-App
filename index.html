@@ -8,115 +8,99 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/lucide@0.344.0/dist/umd/lucide.min.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 </head>
-<body>
+<body class="bg-slate-50 text-slate-900">
     <div id="root"></div>
 
     <script type="text/babel">
         const { useState, useEffect, useMemo, useRef } = React;
-        const { Plus, Trash2, CheckCircle2, Circle, Calendar, Star, Send, Clipboard, Layers, Sparkles, MessageSquare, Settings, X, Zap, History, Cloud, Target, Pin, ChevronRight, ExternalLink, Edit3, Bookmark, Layout, Activity, TrendingUp, Lightbulb, Link2, Search, Globe, Clock } = lucide;
 
-        // --- ⚠️ ここをご自身のキーに書き換えてください ---
+        // --- あなたの設定をすべて反映済み ---
         const firebaseConfig = {
-            apiKey: "あなたのFirebaseのAPIキー",
-            authDomain: "あなたのプロジェクトID.firebaseapp.com",
-            projectId: "あなたのプロジェクトID",
-            storageBucket: "あなたのプロジェクトID.appspot.com",
-            messagingSenderId: "あなたのSenderID",
-            appId: "あなたのAppID"
+            apiKey: "AIzaSyBXDp6iEudhalJGQE-cxOZw4-scYvlnAjE",
+            authDomain: "tasuku-app-2d0cd.firebaseapp.com",
+            projectId: "tasuku-app-2d0cd",
+            storageBucket: "tasuku-app-2d0cd.firebasestorage.app",
+            messagingSenderId: "576034343714",
+            appId: "1:576034343714:web:d4556461f0a3c52453337b",
+            measurementId: "G-38W947XG7V"
         };
         
-        const GEMINI_API_KEY = "あなたのGeminiのAPIキー"; 
-        // ----------------------------------------------
+        const GEMINI_API_KEY = "AIzaSyBuCdxrtXozaTUJOItw3J-A9VCRLTFzr5s";
+        const appId = 'tasuku-App-v1';
+        // ------------------------------
 
         // Firebase初期化
-        if (!firebase.apps.length) {
-            firebase.initializeApp(firebaseConfig);
-        }
-        const auth = firebase.auth();
+        if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
-        const appId = 'tasuku-App-v1';
+        const auth = firebase.auth();
 
-        // アプリ本体の開始
+        // アイコン表示用コンポーネント
+        const LucideIcon = ({ name, className = "w-5 h-5" }) => {
+            useEffect(() => { 
+                if (typeof lucide !== 'undefined') lucide.createIcons(); 
+            }, [name]);
+            return <i data-lucide={name} className={className}></i>;
+        };
+
         const App = () => {
             const [user, setUser] = useState(null);
             const [tasks, setTasks] = useState([]);
             const [userInput, setUserInput] = useState("");
-            const [isProcessing, setIsProcessing] = useState(false);
-            const [notificationMsg, setNotificationMsg] = useState(null);
-            const [showSummary, setShowSummary] = useState(false);
-            const [advice, setAdvice] = useState("Kiiさん、タスクを分析しています...");
-            const [isGeneratingAdvice, setIsGeneratingAdvice] = useState(false);
-            const [showSettings, setShowSettings] = useState(false);
-            const [announcementTime, setAnnouncementTime] = useState("18:00");
-            const [isReminderActive, setIsReminderActive] = useState(true);
+            const [advice, setAdvice] = useState("Kiiさん、あなたのタスクを待っています...");
 
-            // 認証と初期化 (匿名認証)
             useEffect(() => {
+                // 匿名認証でログイン
                 auth.signInAnonymously().catch(console.error);
-                return auth.onAuthStateChanged(u => setUser(u));
+                auth.onAuthStateChanged(u => setUser(u));
             }, []);
 
-            // データ同期
-            useEffect(() => {
-                if (!user) return;
-                const path = db.collection('artifacts').doc(appId).collection('users').doc(user.uid);
-                
-                const unsubTasks = path.collection('tasks').onSnapshot(snap => {
-                    setTasks(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-                });
-
-                const unsubSettings = path.collection('config').doc('user_settings').onSnapshot(doc => {
-                    if (doc.exists()) {
-                        const d = doc.data();
-                        setAnnouncementTime(d.announcementTime || "18:00");
-                        setIsReminderActive(d.isReminderActive ?? true);
-                    }
-                });
-
-                return () => { unsubTasks(); unsubSettings(); };
-            }, [user]);
-
-            // --- 以降、元のロジックをここに統合 ---
-            // (文字数制限のため一部省略していますが、表示と保存はこれで動きます)
-
             return (
-                <div className="min-h-screen bg-[#F8FAFC] p-6 md:p-12 pb-32 font-sans">
-                    <header className="flex justify-between items-center mb-10 max-w-3xl mx-auto">
-                        <h1 className="text-3xl font-black italic text-slate-900">Kii's <span className="text-indigo-600">Secretary</span></h1>
-                        <button onClick={() => setShowSettings(true)} className="p-3 bg-white rounded-2xl border border-slate-200 shadow-sm text-slate-400">
-                            <Settings size={22} />
-                        </button>
+                <div className="min-h-screen p-6 md:p-12 max-w-3xl mx-auto font-sans">
+                    <header className="flex justify-between items-center mb-10">
+                        <div className="flex items-center gap-2 text-indigo-600">
+                            <LucideIcon name="cloud" className="w-8 h-8" />
+                            <h1 className="text-3xl font-black italic text-slate-900 tracking-tighter">
+                                Kii's <span className="text-indigo-600">Secretary</span>
+                            </h1>
+                        </div>
+                        <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-sm text-slate-400">
+                            <LucideIcon name="settings" />
+                        </div>
                     </header>
 
-                    <main className="max-w-3xl mx-auto space-y-8">
-                        {/* アドバイスエリア */}
-                        <div className="bg-indigo-600 rounded-[40px] p-8 text-white shadow-xl relative overflow-hidden">
-                            <div className="relative z-10">
-                                <p className="text-[10px] font-bold uppercase tracking-widest opacity-70 mb-4">Secretary Advice</p>
-                                <p className="text-lg font-bold leading-relaxed">{advice}</p>
+                    <div className="bg-indigo-600 rounded-[40px] p-8 text-white shadow-xl mb-10 relative overflow-hidden transition-all hover:scale-[1.01]">
+                        <div className="relative z-10">
+                            <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.3em] opacity-70 mb-4">
+                                <LucideIcon name="lightbulb" className="w-4 h-4" /> Secretary Advice
                             </div>
+                            <p className="text-xl font-bold leading-relaxed">{advice}</p>
                         </div>
+                    </div>
 
-                        {/* 入力エリア */}
-                        <div className="bg-white rounded-[40px] p-8 border border-slate-100 shadow-sm">
-                            <textarea 
-                                value={userInput}
-                                onChange={(e) => setUserInput(e.target.value)}
-                                className="w-full h-32 border-none focus:ring-0 text-xl resize-none"
-                                placeholder="タスクを入力（例：明日の会議を追加）"
-                            />
-                            <div className="flex justify-end mt-4">
-                                <button className="bg-slate-900 text-white px-8 py-3 rounded-full font-bold flex items-center gap-2">
-                                    <Send size={16} /> 反映する
-                                </button>
-                            </div>
+                    <div className="bg-white rounded-[40px] p-10 border border-slate-100 shadow-sm mb-12 focus-within:ring-2 focus-within:ring-indigo-400 transition-all">
+                        <textarea 
+                            value={userInput}
+                            onChange={(e) => setUserInput(e.target.value)}
+                            className="w-full h-32 border-none focus:ring-0 text-2xl font-medium resize-none placeholder:text-slate-200"
+                            placeholder="今日やることを教えてください..."
+                        />
+                        <div className="flex justify-end mt-6">
+                            <button className="bg-slate-900 text-white px-10 py-4 rounded-full font-black text-sm flex items-center gap-3 hover:bg-indigo-600 active:scale-95 transition-all shadow-lg">
+                                <LucideIcon name="send" className="w-4 h-4 text-indigo-400" /> 反映する
+                            </button>
                         </div>
-                    </main>
+                    </div>
+
+                    <div className="flex items-center justify-center gap-4 text-slate-300">
+                        <div className="h-px bg-slate-200 flex-1"></div>
+                        <LucideIcon name="zap" className="w-4 h-4 fill-slate-200" />
+                        <div className="h-px bg-slate-200 flex-1"></div>
+                    </div>
                 </div>
             );
         };
