@@ -39,7 +39,7 @@
         const auth = firebase.auth();
 
         const Icon = ({ name, className = "w-5 h-5" }) => {
-            useEffect(() => { lucide.createIcons(); }, [name]);
+            useEffect(() => { if(window.lucide) window.lucide.createIcons(); }, [name]);
             return <i data-lucide={name} className={className}></i>;
         };
 
@@ -50,16 +50,18 @@
             const [isProcessing, setIsProcessing] = useState(false);
 
             useEffect(() => {
-                auth.signInAnonymously().catch(console.error);
+                auth.signInAnonymously().catch(e => console.error("Auth Error:", e));
                 auth.onAuthStateChanged(u => setUser(u));
             }, []);
 
             useEffect(() => {
                 if (!user) return;
-                return db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks')
+                const unsubscribe = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks')
+                    .orderBy('createdAt', 'desc')
                     .onSnapshot(snap => {
                         setTasks(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-                    });
+                    }, e => console.error("Firestore Error:", e));
+                return () => unsubscribe();
             }, [user]);
 
             const processAI = async () => {
@@ -71,22 +73,22 @@
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            contents: [{ parts: [{ text: `以下の内容からタスクを抽出してJSON形式で答えてください。JSON以外は答えないでください。 形式: {"tasks": [{"text": "内容", "project": "プロジェクト名"}]} 入力: ${userInput}` }] }],
+                            contents: [{ parts: [{ text: `入力からタスクを抽出してJSON形式で返してください。形式: {"tasks": [{"text": "内容", "project": "プロジェクト名"}]}。入力: ${userInput}` }] }],
                             generationConfig: { responseMimeType: "application/json" }
                         })
                     });
 
                     const data = await response.json();
-                    const text = data.candidates[0].content.parts[0].text;
-                    const result = JSON.parse(text);
-
+                    if (!data.candidates || !data.candidates[0]) throw new Error("AI応答エラー");
+                    
+                    const result = JSON.parse(data.candidates[0].content.parts[0].text);
                     const batch = db.batch();
                     const tasksRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks');
                     
                     if (result.tasks && Array.isArray(result.tasks)) {
                         result.tasks.forEach(t => {
                             batch.set(tasksRef.doc(), {
-                                text: t.text,
+                                text: t.text || "無題のタスク",
                                 project: t.project || "未分類",
                                 completed: false,
                                 isToday: true,
@@ -97,8 +99,8 @@
                     }
                     setUserInput("");
                 } catch (e) {
-                    alert("AI解析中にエラーが起きました。もう一度試してください。");
-                    console.error(e);
+                    console.error("Process Error:", e);
+                    alert("処理中にエラーが発生しました。入力を変えてもう一度お試しください。");
                 } finally {
                     setIsProcessing(false);
                 }
@@ -112,7 +114,7 @@
                 db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks').doc(id).delete();
             };
 
-            const projects = useMemo(() => {
+            const projectGroups = useMemo(() => {
                 return tasks.reduce((acc, t) => {
                     const p = t.project || '未分類';
                     if (!acc[p]) acc[p] = [];
@@ -124,26 +126,26 @@
             return (
                 <div className="min-h-screen p-6 md:p-12 max-w-3xl mx-auto">
                     <header className="flex justify-between items-center mb-10">
-                        <h1 className="text-3xl font-black italic">Kii's <span className="text-indigo-600">Secretary</span></h1>
-                        <Icon name="settings" className="text-slate-400" />
+                        <h1 className="text-3xl font-black italic">Kii's <span className="text-indigo-600 tracking-tighter">Secretary</span></h1>
+                        <div className="bg-white p-2 rounded-xl border shadow-sm text-slate-400"><Icon name="settings" /></div>
                     </header>
 
                     <div className="bg-indigo-600 rounded-[40px] p-8 text-white shadow-xl mb-10">
                         <p className="text-xl font-bold leading-relaxed">Kiiさん、タスクを分析して戦略を立てています...</p>
                     </div>
 
-                    <div className="bg-white rounded-[40px] border border-slate-100 p-8 mb-16 shadow-sm">
+                    <div className="bg-white rounded-[40px] border border-slate-100 p-8 mb-16 shadow-sm focus-within:ring-2 ring-indigo-200 transition-all">
                         <textarea 
                             value={userInput}
                             onChange={(e) => setUserInput(e.target.value)}
-                            className="w-full h-32 border-none focus:ring-0 text-xl font-medium"
+                            className="w-full h-32 border-none focus:ring-0 text-xl font-medium resize-none"
                             placeholder="今日やることを教えてください..."
                         />
                         <div className="flex justify-end mt-4">
                             <button 
                                 onClick={processAI} 
                                 disabled={isProcessing}
-                                className="bg-slate-900 text-white px-8 py-3 rounded-full font-bold flex items-center gap-2 hover:bg-indigo-600 transition-all"
+                                className="bg-slate-900 text-white px-10 py-4 rounded-full font-bold flex items-center gap-3 hover:bg-indigo-600 disabled:bg-slate-300 transition-all shadow-lg"
                             >
                                 <Icon name="send" className="w-4 h-4" />
                                 {isProcessing ? "解析中..." : "反映する"}
@@ -151,20 +153,23 @@
                         </div>
                     </div>
 
-                    <div className="space-y-10">
-                        {Object.entries(projects).map(([name, pTasks]) => (
+                    <div className="space-y-12">
+                        {Object.entries(projectGroups).length === 0 && !isProcessing && (
+                            <div className="text-center py-20 text-slate-300 font-bold border-2 border-dashed rounded-[40px]">タスクがありません</div>
+                        )}
+                        {Object.entries(projectGroups).map(([name, pTasks]) => (
                             <section key={name}>
-                                <h2 className="text-xl font-black mb-4 flex items-center gap-2">
-                                    <div className="w-1 h-5 bg-indigo-600 rounded-full"></div>{name}
+                                <h2 className="text-lg font-black mb-6 flex items-center gap-2 px-2">
+                                    <div className="w-1.5 h-5 bg-indigo-600 rounded-full"></div>{name}
                                 </h2>
-                                <div className="space-y-3">
+                                <div className="space-y-4">
                                     {pTasks.map(t => (
-                                        <div key={t.id} className="flex items-center gap-4 p-5 bg-white rounded-3xl shadow-sm border border-slate-50">
+                                        <div key={t.id} className="flex items-center gap-4 p-6 bg-white rounded-[28px] shadow-sm border border-slate-50 hover:shadow-md transition-shadow">
                                             <button onClick={() => toggleTask(t.id, t.completed)}>
                                                 <Icon name={t.completed ? "check-circle-2" : "circle"} className={t.completed ? "text-emerald-500" : "text-slate-200"} />
                                             </button>
-                                            <span className={`flex-1 font-bold ${t.completed ? 'line-through text-slate-300' : ''}`}>{t.text}</span>
-                                            <button onClick={() => deleteTask(t.id)} className="text-slate-200 hover:text-rose-500"><Icon name="trash-2" /></button>
+                                            <span className={`flex-1 font-bold ${t.completed ? 'line-through text-slate-300' : 'text-slate-700'}`}>{t.text}</span>
+                                            <button onClick={() => deleteTask(t.id)} className="text-slate-200 hover:text-rose-500 transition-colors"><Icon name="trash-2" /></button>
                                         </div>
                                     ))}
                                 </div>
