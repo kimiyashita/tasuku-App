@@ -14,7 +14,9 @@
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&display=swap');
-        body { font-family: 'Noto Sans JP', sans-serif; background: #F8FAFC; color: #1e293b; }
+        body { font-family: 'Noto Sans JP', sans-serif; background: #F8FAFC; color: #1e293b; overflow-x: hidden; }
+        .task-card { transition: all 0.2s ease; }
+        .task-card:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
     </style>
 </head>
 <body>
@@ -50,7 +52,7 @@
             const [isProcessing, setIsProcessing] = useState(false);
 
             useEffect(() => {
-                auth.signInAnonymously().catch(e => console.error("Auth Error:", e));
+                auth.signInAnonymously().catch(console.error);
                 auth.onAuthStateChanged(u => setUser(u));
             }, []);
 
@@ -60,7 +62,7 @@
                     .orderBy('createdAt', 'desc')
                     .onSnapshot(snap => {
                         setTasks(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-                    }, e => console.error("Firestore Error:", e));
+                    }, err => console.error("Firestore error:", err));
                 return () => unsubscribe();
             }, [user]);
 
@@ -73,34 +75,42 @@
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            contents: [{ parts: [{ text: `入力からタスクを抽出してJSON形式で返してください。形式: {"tasks": [{"text": "内容", "project": "プロジェクト名"}]}。入力: ${userInput}` }] }],
-                            generationConfig: { responseMimeType: "application/json" }
+                            contents: [{ parts: [{ text: `以下の入力からタスクを抽出して、必ずこのJSON形式だけで返してください。余計な説明や装飾は一切不要です： {"tasks": [{"text": "タスク内容", "project": "プロジェクト名"}]} \n\n入力： ${userInput}` }] }],
+                            generationConfig: { 
+                                responseMimeType: "application/json"
+                            }
                         })
                     });
 
                     const data = await response.json();
-                    if (!data.candidates || !data.candidates[0]) throw new Error("AI応答エラー");
+                    let aiText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
                     
-                    const result = JSON.parse(data.candidates[0].content.parts[0].text);
+                    // 万が一JSON以外の文字が含まれていても抽出を試みる
+                    const jsonMatch = aiText.match(/\{.*\}/s);
+                    const result = JSON.parse(jsonMatch ? jsonMatch[0] : aiText);
+                    const taskList = Array.isArray(result.tasks) ? result.tasks : [];
+
                     const batch = db.batch();
                     const tasksRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks');
                     
-                    if (result.tasks && Array.isArray(result.tasks)) {
-                        result.tasks.forEach(t => {
+                    if (taskList.length > 0) {
+                        taskList.forEach(t => {
                             batch.set(tasksRef.doc(), {
-                                text: t.text || "無題のタスク",
-                                project: t.project || "未分類",
+                                text: String(t.text || "新しいタスク"),
+                                project: String(t.project || "未分類"),
                                 completed: false,
                                 isToday: true,
                                 createdAt: new Date().toISOString()
                             });
                         });
                         await batch.commit();
+                        setUserInput("");
+                    } else {
+                        throw new Error("タスクが見つかりませんでした");
                     }
-                    setUserInput("");
                 } catch (e) {
-                    console.error("Process Error:", e);
-                    alert("処理中にエラーが発生しました。入力を変えてもう一度お試しください。");
+                    console.error("AI Error:", e);
+                    alert("AI解析でエラーが起きましたが、アプリは無事です。もう一度「反映する」を押すか、内容を少し変えてみてください。");
                 } finally {
                     setIsProcessing(false);
                 }
@@ -114,7 +124,7 @@
                 db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks').doc(id).delete();
             };
 
-            const projectGroups = useMemo(() => {
+            const groupedTasks = useMemo(() => {
                 return tasks.reduce((acc, t) => {
                     const p = t.project || '未分類';
                     if (!acc[p]) acc[p] = [];
@@ -124,28 +134,42 @@
             }, [tasks]);
 
             return (
-                <div className="min-h-screen p-6 md:p-12 max-w-3xl mx-auto">
-                    <header className="flex justify-between items-center mb-10">
-                        <h1 className="text-3xl font-black italic">Kii's <span className="text-indigo-600 tracking-tighter">Secretary</span></h1>
-                        <div className="bg-white p-2 rounded-xl border shadow-sm text-slate-400"><Icon name="settings" /></div>
+                <div className="min-h-screen p-4 md:p-12 max-w-2xl mx-auto">
+                    <header className="flex justify-between items-center mb-8">
+                        <div className="flex items-center gap-2">
+                            <div className="bg-indigo-600 p-2 rounded-lg text-white shadow-lg shadow-indigo-200">
+                                <Icon name="cloud" className="w-5 h-5" />
+                            </div>
+                            <h1 className="text-2xl font-black tracking-tighter">Kii's Secretary</h1>
+                        </div>
+                        <button className="p-2 bg-white border rounded-xl text-slate-400 hover:text-indigo-600 transition-colors">
+                            <Icon name="settings" />
+                        </button>
                     </header>
 
-                    <div className="bg-indigo-600 rounded-[40px] p-8 text-white shadow-xl mb-10">
-                        <p className="text-xl font-bold leading-relaxed">Kiiさん、タスクを分析して戦略を立てています...</p>
+                    <div className="bg-gradient-to-br from-indigo-600 to-indigo-700 rounded-[32px] p-8 text-white shadow-xl mb-8 relative overflow-hidden">
+                        <div className="relative z-10">
+                            <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.3em] mb-4 opacity-70">
+                                <Icon name="lightbulb" className="w-4 h-4" /> Secretary Advice
+                            </div>
+                            <p className="text-lg font-bold leading-snug">
+                                {isProcessing ? "タスクを整理しています。少々お待ちください..." : "Kiiさん、今日のタスクを教えてください。"}
+                            </p>
+                        </div>
                     </div>
 
-                    <div className="bg-white rounded-[40px] border border-slate-100 p-8 mb-16 shadow-sm focus-within:ring-2 ring-indigo-200 transition-all">
+                    <div className="bg-white rounded-[32px] border border-slate-100 p-6 mb-12 shadow-sm focus-within:ring-2 ring-indigo-100 transition-all">
                         <textarea 
                             value={userInput}
                             onChange={(e) => setUserInput(e.target.value)}
-                            className="w-full h-32 border-none focus:ring-0 text-xl font-medium resize-none"
-                            placeholder="今日やることを教えてください..."
+                            className="w-full h-32 border-none focus:ring-0 text-lg font-medium resize-none placeholder:text-slate-200"
+                            placeholder="例：カラーキーの契約書作成、プロジェクトAの会議予約"
                         />
-                        <div className="flex justify-end mt-4">
+                        <div className="flex justify-end items-center mt-4">
                             <button 
                                 onClick={processAI} 
                                 disabled={isProcessing}
-                                className="bg-slate-900 text-white px-10 py-4 rounded-full font-bold flex items-center gap-3 hover:bg-indigo-600 disabled:bg-slate-300 transition-all shadow-lg"
+                                className="bg-slate-900 text-white px-8 py-3 rounded-full font-black text-sm flex items-center gap-2 hover:bg-indigo-600 disabled:bg-slate-200 transition-all shadow-lg active:scale-95"
                             >
                                 <Icon name="send" className="w-4 h-4" />
                                 {isProcessing ? "解析中..." : "反映する"}
@@ -153,23 +177,24 @@
                         </div>
                     </div>
 
-                    <div className="space-y-12">
-                        {Object.entries(projectGroups).length === 0 && !isProcessing && (
-                            <div className="text-center py-20 text-slate-300 font-bold border-2 border-dashed rounded-[40px]">タスクがありません</div>
+                    <div className="space-y-10 pb-20">
+                        {Object.entries(groupedTasks).length === 0 && !isProcessing && (
+                            <div className="text-center py-16 text-slate-200 font-black tracking-widest border-2 border-dashed rounded-[32px]">NO STRATEGY YET</div>
                         )}
-                        {Object.entries(projectGroups).map(([name, pTasks]) => (
-                            <section key={name}>
-                                <h2 className="text-lg font-black mb-6 flex items-center gap-2 px-2">
-                                    <div className="w-1.5 h-5 bg-indigo-600 rounded-full"></div>{name}
-                                </h2>
-                                <div className="space-y-4">
+                        {Object.entries(groupedTasks).map(([project, pTasks]) => (
+                            <section key={project}>
+                                <div className="flex items-center gap-2 mb-4 px-2">
+                                    <div className="w-1.5 h-4 bg-indigo-600 rounded-full"></div>
+                                    <h2 className="text-sm font-black uppercase tracking-widest text-slate-400">{project}</h2>
+                                </div>
+                                <div className="space-y-3">
                                     {pTasks.map(t => (
-                                        <div key={t.id} className="flex items-center gap-4 p-6 bg-white rounded-[28px] shadow-sm border border-slate-50 hover:shadow-md transition-shadow">
+                                        <div key={t.id} className="task-card flex items-center gap-4 p-5 bg-white rounded-2xl border border-slate-50 shadow-sm">
                                             <button onClick={() => toggleTask(t.id, t.completed)}>
                                                 <Icon name={t.completed ? "check-circle-2" : "circle"} className={t.completed ? "text-emerald-500" : "text-slate-200"} />
                                             </button>
-                                            <span className={`flex-1 font-bold ${t.completed ? 'line-through text-slate-300' : 'text-slate-700'}`}>{t.text}</span>
-                                            <button onClick={() => deleteTask(t.id)} className="text-slate-200 hover:text-rose-500 transition-colors"><Icon name="trash-2" /></button>
+                                            <span className={`flex-1 font-bold text-[15px] ${t.completed ? 'line-through text-slate-300' : 'text-slate-700'}`}>{t.text}</span>
+                                            <button onClick={() => deleteTask(t.id)} className="text-slate-200 hover:text-rose-500 transition-colors p-1"><Icon name="trash-2" className="w-4 h-4" /></button>
                                         </div>
                                     ))}
                                 </div>
