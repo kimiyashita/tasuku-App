@@ -3,129 +3,137 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>tasuku-App | Kii's Secretary</title>
+    <title>Kii's Secretary</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&display=swap" rel="stylesheet">
+    
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
     <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+    <style>
+        body { font-family: 'Noto Sans JP', sans-serif; }
+        .loading-spinner { border-top-color: #4f46e5; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
 </head>
-<body>
+<body class="bg-[#F8FAFC]">
     <div id="root"></div>
 
     <script type="text/babel">
-        // Firebaseの初期化 (Compat版)
+        // === 必須設定：ここを自分の情報に書き換えてください ===
         const firebaseConfig = {
-            apiKey: "ここにあなたのAPI_KEYを入れてください",
-            authDomain: "あなたのPROJECT_ID.firebaseapp.com",
-            projectId: "あなたのPROJECT_ID",
-            storageBucket: "あなたのPROJECT_ID.appspot.com",
-            messagingSenderId: "あなたのSENDER_ID",
-            appId: "あなたのAPP_ID"
+            apiKey: "ここにAPIキーを入力",
+            authDomain: "プロジェクトID.firebaseapp.com",
+            projectId: "プロジェクトID",
+            storageBucket: "プロジェクトID.appspot.com",
+            messagingSenderId: "数値",
+            appId: "アプリID"
         };
-        
+        const GEMINI_API_KEY = "ここにGeminiのキーを入力";
+        // ===============================================
+
         // Firebase初期化
-        firebase.initializeApp(firebaseConfig);
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
         const auth = firebase.auth();
         const db = firebase.firestore();
-        
-        const GEMINI_API_KEY = "ここにGeminiのAPIキーを入れてください";
-        const appId = 'kii-ultimate-stable-workspace-v1';
+        const appId = 'kii-stable-v1';
 
-        const { useState, useEffect, useMemo, useRef } = React;
+        const { useState, useEffect } = React;
 
-        const App = () => {
+        function App() {
             const [user, setUser] = useState(null);
             const [tasks, setTasks] = useState([]);
-            const [userInput, setUserInput] = useState("");
-            const [isProcessing, setIsProcessing] = useState(false);
-            const [advice, setAdvice] = useState("Kiiさん、戦略を立てています...");
+            const [input, setInput] = useState("");
+            const [loading, setLoading] = useState(true);
 
-            // アイコンのレンダリング
-            useEffect(() => {
-                lucide.createIcons();
-            }, [tasks, advice]);
+            // アイコンを適用する関数
+            const refreshIcons = () => {
+                if (window.lucide) window.lucide.createIcons();
+            };
 
-            // ログイン処理
             useEffect(() => {
-                auth.signInAnonymously().catch(err => console.error("Auth Error:", err));
-                const unsubscribe = auth.onAuthStateChanged((currentUser) => {
-                    setUser(currentUser);
+                const unsubscribe = auth.onAuthStateChanged((u) => {
+                    if (u) {
+                        setUser(u);
+                        setLoading(false);
+                    } else {
+                        auth.signInAnonymously().catch(console.error);
+                    }
                 });
                 return () => unsubscribe();
             }, []);
 
-            // データ購読
             useEffect(() => {
                 if (!user) return;
-                const unsubscribe = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks')
-                    .onSnapshot((snapshot) => {
-                        const tasksData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        setTasks(tasksData);
+                const unsubscribe = db.collection('artifacts').doc(appId)
+                    .collection('users').doc(user.uid).collection('tasks')
+                    .orderBy('createdAt', 'desc')
+                    .onSnapshot(ss => {
+                        setTasks(ss.docs.map(d => ({id: d.id, ...d.data()})));
+                        setTimeout(refreshIcons, 100);
                     });
                 return () => unsubscribe();
             }, [user]);
 
-            // タスク追加
-            const handleAdd = async () => {
-                if (!userInput.trim() || !user) return;
-                setIsProcessing(true);
-                try {
-                    await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks').add({
-                        text: userInput,
+            const addTask = async () => {
+                if (!input.trim()) return;
+                await db.collection('artifacts').doc(appId)
+                    .collection('users').doc(user.uid).collection('tasks').add({
+                        text: input,
                         completed: false,
-                        isToday: true,
-                        createdAt: new Date().toISOString()
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp()
                     });
-                    setUserInput("");
-                } catch (e) { console.error(e); }
-                setIsProcessing(false);
+                setInput("");
             };
 
-            if (!user) return <div className="flex h-screen items-center justify-center font-bold">Connecting...</div>;
+            if (loading) return (
+                <div className="flex h-screen items-center justify-center">
+                    <div className="w-8 h-8 border-4 border-slate-200 loading-spinner rounded-full"></div>
+                </div>
+            );
 
             return (
-                <div className="min-h-screen bg-[#F8FAFC] p-4 md:p-8">
-                    <div className="max-w-3xl mx-auto">
-                        <header className="mb-8">
-                            <h1 className="text-2xl font-black text-slate-900">Kii's <span className="text-indigo-600">Secretary</span></h1>
-                        </header>
+                <div className="max-w-2xl mx-auto p-6">
+                    <header className="mb-10 flex items-center gap-3">
+                        <div className="bg-indigo-600 p-2 rounded-lg text-white">
+                            <i data-lucide="cloud"></i>
+                        </div>
+                        <h1 className="text-2xl font-black text-slate-800">Kii's Secretary</h1>
+                    </header>
 
-                        <div className="bg-indigo-600 rounded-[32px] p-8 mb-10 text-white shadow-xl">
-                            <div className="flex items-center gap-2 mb-2 opacity-70">
-                                <i data-lucide="lightbulb" className="w-4 h-4"></i>
-                                <span className="text-[10px] font-bold uppercase tracking-widest">Advice</span>
+                    <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 mb-8 flex gap-3">
+                        <input 
+                            value={input}
+                            onChange={(e) => setInput(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && addTask()}
+                            placeholder="今日のアクションを入力..."
+                            className="flex-1 outline-none text-lg"
+                        />
+                        <button onClick={addTask} className="bg-indigo-600 text-white p-3 rounded-2xl hover:bg-indigo-700 transition">
+                            <i data-lucide="send"></i>
+                        </button>
+                    </div>
+
+                    <div className="space-y-3">
+                        {tasks.map(t => (
+                            <div key={t.id} className="bg-white p-4 rounded-2xl border border-slate-100 flex items-center gap-4 shadow-sm">
+                                <i data-lucide="circle" className="text-slate-300"></i>
+                                <span className="font-bold text-slate-700">{t.text}</span>
                             </div>
-                            <p className="text-lg font-bold">{advice}</p>
-                        </div>
-
-                        <div className="bg-white rounded-[32px] p-6 mb-8 shadow-sm border border-slate-100 flex gap-4">
-                            <input 
-                                value={userInput}
-                                onChange={(e) => setUserInput(e.target.value)}
-                                className="flex-1 text-lg outline-none"
-                                placeholder="新しいタスクを入力..."
-                            />
-                            <button onClick={handleAdd} className="bg-indigo-600 text-white px-6 py-2 rounded-2xl font-bold">
-                                {isProcessing ? "..." : "追加"}
-                            </button>
-                        </div>
-
-                        <div className="space-y-4">
-                            {tasks.map(task => (
-                                <div key={task.id} className="flex items-center gap-4 p-4 bg-white rounded-2xl border border-slate-100">
-                                    <div className="flex-1 font-bold text-slate-800">{task.text}</div>
-                                    <i data-lucide="check-circle-2" className="text-slate-200 cursor-pointer hover:text-indigo-500"></i>
-                                </div>
-                            ))}
-                        </div>
+                        ))}
                     </div>
                 </div>
             );
-        };
+        }
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
