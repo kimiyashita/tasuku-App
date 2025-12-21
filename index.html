@@ -9,21 +9,32 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Inter:wght@400;600;700&display=swap');
-        body { font-family: 'Noto Sans JP', sans-serif; -webkit-font-smoothing: antialiased; color: #1e293b; background: #F8FAFC; }
+        body { 
+            font-family: 'Noto Sans JP', sans-serif; 
+            font-style: normal !important;
+            -webkit-font-smoothing: antialiased;
+            color: #1e293b;
+            background: #F8FAFC;
+        }
+        * { font-style: normal !important; }
         .task-title { font-size: 15px; line-height: 1.6; font-weight: 700; }
         .advice-line { border-bottom: 1px solid rgba(255,255,255,0.08); padding: 12px 0; }
-        textarea { padding: 28px !important; }
+        .advice-line:last-child { border-bottom: none; }
+        textarea { padding: 24px !important; }
         .animate-in { animation: fadeIn 0.5s ease-out forwards; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     </style>
 </head>
 <body>
     <div id="root"></div>
+
     <script type="text/babel">
         const { useState, useEffect, useMemo, useRef } = React;
 
@@ -42,15 +53,26 @@
         const db = firebase.firestore();
         const auth = firebase.auth();
 
-        const Icon = ({ name, size = 20, className = "" }) => {
+        // Lucide アイコンを HTML1枚環境で安全に表示するためのコンポーネント
+        const Icon = ({ name, size = 20, className = "", fill = "none" }) => {
             const ref = useRef(null);
             useEffect(() => {
                 if (ref.current && lucide.icons[name]) {
                     ref.current.innerHTML = '';
-                    lucide.createIcons({ icons: { [name]: lucide.icons[name] }, attrs: { width: size, height: size, class: className } });
+                    lucide.createIcons({
+                        icons: { [name]: lucide.icons[name] },
+                        attrs: { 
+                            stroke: "currentColor", 
+                            "stroke-width": 2, 
+                            width: size, 
+                            height: size, 
+                            class: className,
+                            fill: fill 
+                        }
+                    });
                 }
-            }, [name]);
-            return <span ref={ref} className="inline-flex items-center"></span>;
+            }, [name, size, className, fill]);
+            return <span ref={ref} className="inline-flex items-center justify-center"></span>;
         };
 
         const App = () => {
@@ -58,6 +80,7 @@
             const [tasks, setTasks] = useState([]);
             const [userInput, setUserInput] = useState("");
             const [isProcessing, setIsProcessing] = useState(false);
+            const [notificationMsg, setNotificationMsg] = useState(null);
             const [advice, setAdvice] = useState("Kiiさん、タスクを分析して戦略を立てています...");
 
             useEffect(() => {
@@ -67,13 +90,18 @@
 
             useEffect(() => {
                 if (!user) return;
-                return db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks')
-                    .orderBy('createdAt', 'desc').onSnapshot(snap => {
-                        setTasks(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-                    });
+                const tasksCollection = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks');
+                return tasksCollection.onSnapshot(snap => {
+                    setTasks(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+                });
             }, [user]);
 
-            const processAI = async () => {
+            const triggerNotification = (msg) => {
+                setNotificationMsg(msg);
+                setTimeout(() => setNotificationMsg(null), 3000);
+            };
+
+            const processMessageWithAI = async () => {
                 if (!userInput.trim() || !user || isProcessing) return;
                 setIsProcessing(true);
                 try {
@@ -81,32 +109,39 @@
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            contents: [{ parts: [{ text: `入力からタスク(add)を判断しJSON出力してください。形式: {"actions": [{"type": "add", "data": {"text": "内容", "project": "プロジェクト名", "isToday": true}}]} 入力: ${userInput}` }] }],
+                            contents: [{ parts: [{ text: `入力からタスク(add)を判断し、必ずこのJSON形式だけで出力してください： {"actions": [{"type": "add", "data": {"text": "内容", "project": "プロジェクト名", "isToday": true}}]} 入力: ${userInput}` }] }],
                             generationConfig: { responseMimeType: "application/json" }
                         })
                     });
                     const data = await response.json();
-                    const result = JSON.parse(data.candidates[0].content.parts[0].text);
+                    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+                    const result = JSON.parse(rawText.match(/\{.*\}/s)?.[0] || rawText);
+                    
                     const batch = db.batch();
                     const tasksRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks');
+                    
                     if (result.actions) {
-                        result.actions.forEach(a => {
-                            if (a.type === 'add') batch.set(tasksRef.doc(), { ...a.data, completed: false, createdAt: new Date().toISOString() });
+                        result.actions.forEach(action => {
+                            if (action.type === 'add') {
+                                batch.set(tasksRef.doc(), { ...action.data, completed: false, createdAt: new Date().toISOString() });
+                            }
                         });
                         await batch.commit();
+                        triggerNotification("ワークスペースに反映しました。");
                     }
                     setUserInput("");
                 } catch (e) {
-                    alert("解析に失敗しました。もう一度お試しください。");
+                    console.error(e);
+                    alert("AI解析中に不整合が発生しました。もう一度お試しください。");
                 } finally {
                     setIsProcessing(false);
                 }
             };
 
-            const toggleTask = (id, cur) => db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks').doc(id).update({ completed: !cur });
+            const toggleTask = (id, current) => db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks').doc(id).update({ completed: !current });
             const deleteTask = (id) => db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks').doc(id).delete();
 
-            const grouped = useMemo(() => {
+            const processedData = useMemo(() => {
                 const today = tasks.filter(t => t.isToday && !t.completed);
                 const projects = tasks.reduce((acc, t) => {
                     const p = t.project || 'その他';
@@ -117,63 +152,87 @@
                 return { today, projects };
             }, [tasks]);
 
+            const copyToClipboard = () => {
+                const text = tasks.filter(t => t.isToday && !t.completed).map(t => `・${t.text}`).join('\n');
+                navigator.clipboard.writeText(`【報告】\n${text}`);
+                triggerNotification("報告内容をコピーしました。");
+            };
+
+            const TaskRow = ({ task }) => (
+                <div className={`group flex items-start gap-5 p-5 rounded-[24px] transition-all border ${task.completed ? 'opacity-30 border-transparent' : 'bg-white border-slate-200 hover:border-indigo-400 shadow-sm'}`}>
+                    <button onClick={() => toggleTask(task.id, task.completed)} className="mt-0.5 text-slate-300">
+                        <Icon name={task.completed ? "CheckCircle2" : "Circle"} size={24} className={task.completed ? "text-emerald-600" : ""} />
+                    </button>
+                    <div className="flex-1">
+                        <p className={`task-title ${task.completed ? 'line-through text-slate-400' : 'text-slate-800'}`}>{task.text}</p>
+                        <div className="flex items-center gap-2 mt-3">
+                            <span className="text-[10px] font-bold text-indigo-500 bg-indigo-50 px-3 py-1 rounded-full uppercase border border-indigo-100">{task.project}</span>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                        <button onClick={() => window.open(`https://www.google.com/search?q=${encodeURIComponent(task.text)}`, '_blank')} className="p-2 text-slate-400 hover:text-indigo-600"><Icon name="Search" size={16} /></button>
+                        <button onClick={() => deleteTask(task.id)} className="p-2 text-slate-300 hover:text-rose-500"><Icon name="Trash2" size={16} /></button>
+                    </div>
+                </div>
+            );
+
             return (
-                <div className="min-h-screen p-6 md:p-12 pb-32 max-w-3xl mx-auto animate-in">
-                    <header className="flex justify-between items-center mb-10 px-2">
-                        <div>
-                            <div className="flex items-center gap-2 text-indigo-600 mb-2 font-black text-[10px] uppercase tracking-widest"><Icon name="Cloud" /> Strategy Active</div>
-                            <h1 className="text-3xl font-black italic tracking-tight text-slate-900">Kii's <span className="text-indigo-600">Secretary</span></h1>
-                        </div>
-                        <div className="flex gap-3">
-                            <button className="bg-white border p-3 rounded-2xl text-slate-400 shadow-sm"><Icon name="Settings" size={22} /></button>
-                            <button onClick={() => {
-                                const text = tasks.filter(t => t.isToday && !t.completed).map(t => `・${t.text}`).join('\n');
-                                navigator.clipboard.writeText(text); alert("コピーしました");
-                            }} className="bg-white border px-6 py-3 rounded-2xl font-black text-slate-900 shadow-sm flex items-center gap-3"><Icon name="Clipboard" className="text-indigo-500" /> Slack報告</button>
-                        </div>
-                    </header>
-                    <div className="bg-indigo-600 rounded-[40px] p-10 mb-12 shadow-2xl relative overflow-hidden group">
-                        <div className="relative z-10 text-white italic font-bold text-xl">{advice}</div>
-                    </div>
-                    <div className="bg-white rounded-[40px] border p-10 mb-16 shadow-sm focus-within:shadow-xl transition-all">
-                        <textarea value={userInput} onChange={(e) => setUserInput(e.target.value)} className="w-full h-40 bg-transparent border-none focus:ring-0 text-xl font-medium placeholder:text-slate-200 resize-none" placeholder="今日やることを教えてください..." />
-                        <div className="mt-8 flex justify-end">
-                            <button onClick={processAI} disabled={isProcessing} className="bg-slate-900 text-white px-10 py-4 rounded-3xl font-black flex items-center gap-3 shadow-lg active:scale-95 transition-all">
-                                {isProcessing ? "解析中..." : <><Icon name="Send" /> 反映する</>}
-                            </button>
-                        </div>
-                    </div>
-                    <section className="mb-20">
-                        <h2 className="text-2xl font-black italic mb-10 px-2 flex items-center gap-4 uppercase"><div className="bg-amber-100 p-3 rounded-2xl text-amber-600 border border-amber-200"><Icon name="Target" size={26} /></div> 今日のやること</h2>
-                        <div className="space-y-4">
-                            {grouped.today.length === 0 ? <div className="p-20 text-center border-2 border-dashed rounded-[40px] text-slate-200 font-black tracking-widest uppercase opacity-40">Ready for action</div> : grouped.today.map(t => (
-                                <div key={t.id} className="flex items-center gap-5 p-6 bg-white rounded-[32px] border border-slate-100 shadow-sm">
-                                    <button onClick={() => toggleTask(t.id, t.completed)} className="text-slate-300"><Icon name="Circle" size={24} /></button>
-                                    <div className="flex-1 font-bold text-lg">{t.text}</div>
-                                    <div className="text-[10px] font-bold text-indigo-500 bg-indigo-50 px-3 py-1 rounded-full uppercase">{t.project}</div>
+                <div className="min-h-screen p-6 md:p-12 pb-32">
+                    {notificationMsg && <div className="fixed top-8 right-8 bg-slate-900 text-white px-8 py-5 rounded-[24px] shadow-2xl z-[100] flex items-center gap-4 animate-in"><Icon name="Zap" size={20} className="text-yellow-400" fill="currentColor" /><span className="font-bold text-sm tracking-tight">{notificationMsg}</span></div>}
+                    
+                    <div className="max-w-3xl mx-auto">
+                        <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10 px-2">
+                            <div>
+                                <div className="flex items-center gap-2 text-indigo-600 mb-2"><Icon name="Cloud" size={16} /><span className="font-black text-[10px] uppercase tracking-[0.2em]">Strategy Active</span></div>
+                                <h1 className="text-3xl font-black tracking-tight italic text-slate-900">Kii's <span className="text-indigo-600">Secretary</span></h1>
+                            </div>
+                            <div className="flex gap-3">
+                                <button className="bg-white border border-slate-200 p-3 rounded-2xl text-slate-400 shadow-sm hover:bg-slate-50"><Icon name="Settings" size={22} /></button>
+                                <button onClick={copyToClipboard} className="flex items-center gap-3 bg-white border border-slate-200 px-6 py-3 rounded-2xl font-black text-slate-900 shadow-sm active:scale-95"><Icon name="Clipboard" size={18} className="text-indigo-500" /> Slack報告</button>
+                            </div>
+                        </header>
+
+                        <div className="bg-indigo-600 rounded-[40px] p-10 mb-12 shadow-2xl relative overflow-hidden group">
+                            <Icon name="TrendingUp" size={220} className="absolute -right-10 -bottom-10 text-white opacity-10 group-hover:scale-110 transition-transform duration-[3000ms]" />
+                            <div className="relative z-10 text-white">
+                                <div className="flex items-center gap-2 text-indigo-100 font-black text-[10px] uppercase tracking-[0.4em] mb-8 opacity-80"><Icon name="Lightbulb" size={18} />Secretary Advice</div>
+                                <div className="space-y-4">
+                                    {advice.split('\n').map((line, idx) => (<div key={idx} className="advice-line text-lg font-bold text-white leading-relaxed flex items-start gap-4 italic"><div className="mt-2.5 w-1.5 h-1.5 rounded-full bg-white opacity-40 shrink-0" />{line}</div>))}
                                 </div>
+                            </div>
+                        </div>
+
+                        <div className="bg-white rounded-[40px] border border-slate-100 p-10 mb-16 shadow-sm focus-within:shadow-xl transition-all">
+                            <div className="flex items-center gap-3 mb-8 text-slate-900 font-black text-sm uppercase"><Icon name="Edit3" size={20} className="text-emerald-500" /> タスク情報記入</div>
+                            <textarea value={userInput} onChange={(e) => setUserInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) processMessageWithAI(); }} placeholder="例:「LFのタスクを全て12月22日にして」「プロジェクトAにタスクを追加」" className="w-full h-40 bg-transparent border-none focus:ring-0 text-xl font-medium placeholder:text-slate-200 resize-none leading-relaxed" />
+                            <div className="mt-8 flex items-center justify-between px-2">
+                                <span className="text-[10px] text-slate-400 font-bold tracking-widest uppercase">CMD + ENTER TO REFLECT</span>
+                                <button onClick={processMessageWithAI} disabled={isProcessing} className="bg-slate-900 text-white px-10 py-4 rounded-3xl font-black text-sm hover:bg-indigo-600 transition-all flex items-center gap-3 shadow-lg active:scale-95">
+                                    {isProcessing ? "解析中..." : <React.Fragment><Icon name="Send" size={16} /> 反映する</React.Fragment>}
+                                </button>
+                            </div>
+                        </div>
+
+                        <section className="mb-20">
+                            <div className="flex items-center gap-4 mb-10"><div className="bg-amber-100 p-3 rounded-2xl text-amber-600 border border-amber-200 shadow-sm"><Icon name="Target" size={26} /></div><h2 className="text-2xl font-black tracking-tighter uppercase italic">今日のやること</h2></div>
+                            <div className="space-y-5">
+                                {processedData.today.length === 0 ? <div className="p-20 text-center border-2 border-dashed border-slate-200 rounded-[40px] text-slate-300 font-black tracking-widest uppercase opacity-40">Ready for action</div> : processedData.today.map(t => <div key={t.id} className="animate-in"><TaskRow task={t} /></div>)}
+                            </div>
+                        </section>
+
+                        <div className="space-y-24">
+                            {Object.entries(processedData.projects).map(([project, projectTasks]) => (
+                                <section key={project}>
+                                    <h3 className="text-xl font-black flex items-center gap-4 mb-8 px-4 tracking-tighter uppercase"><div className="w-1.5 h-6 bg-indigo-600 rounded-full" />{project}</h3>
+                                    <div className="space-y-4 bg-white/40 p-8 rounded-[48px] border border-white backdrop-blur-sm shadow-sm">{projectTasks.map(t => <TaskRow key={t.id} task={t} />)}</div>
+                                </section>
                             ))}
                         </div>
-                    </section>
-                    <div className="space-y-20">
-                        {Object.entries(grouped.projects).map(([p, pTasks]) => (
-                            <section key={p}>
-                                <h3 className="text-xl font-black flex items-center gap-4 mb-6 px-4 tracking-tighter uppercase"><div className="w-1.5 h-6 bg-indigo-600 rounded-full" />{p}</h3>
-                                <div className="space-y-4 bg-white/40 p-8 rounded-[48px] border border-white backdrop-blur-sm shadow-sm">
-                                    {pTasks.map(t => (
-                                        <div key={t.id} className="flex items-center gap-5 p-5 bg-white rounded-[24px] shadow-sm border border-slate-50 transition-all hover:border-indigo-400">
-                                            <button onClick={() => toggleTask(t.id, t.completed)} className={t.completed ? "text-emerald-500" : "text-slate-200"}><Icon name={t.completed ? "CheckCircle2" : "Circle"} size={24} /></button>
-                                            <div className={`flex-1 font-bold ${t.completed ? 'line-through text-slate-300' : ''}`}>{t.text}</div>
-                                            <button onClick={() => deleteTask(t.id)} className="text-slate-200 hover:text-rose-500 transition-colors"><Icon name="Trash2" size={20} /></button>
-                                        </div>
-                                    ))}
-                                </div>
-                            </section>
-                        ))}
                     </div>
                 </div>
             );
         };
+
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
