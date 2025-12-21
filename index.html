@@ -9,253 +9,116 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://unpkg.com/lucide-react@latest"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 </head>
 <body>
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useMemo, useRef } = React;
-        const { 
-            Plus, Trash2, CheckCircle2, Circle, Calendar, Star, Send, Clipboard, Bell, Layers,
-            Sparkles, MessageSquare, Settings, X, Zap, History, Cloud, Target, Pin,
-            ChevronRight, ExternalLink, Edit3, Bookmark, Layout, Activity, TrendingUp,
-            AlertCircle, Lightbulb, Link2, Clock, Search, Globe
-        } = lucide;
-
-        // --- 設定エリア ---
-        // Firebaseのコンソールから取得した設定をここに貼り付けてください
+        // Firebaseの初期化 (Compat版)
         const firebaseConfig = {
-            apiKey: "YOUR_API_KEY",
-            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-            projectId: "YOUR_PROJECT_ID",
-            storageBucket: "YOUR_PROJECT_ID.appspot.com",
-            messagingSenderId: "YOUR_SENDER_ID",
-            appId: "YOUR_APP_ID"
+            apiKey: "ここにあなたのAPI_KEYを入れてください",
+            authDomain: "あなたのPROJECT_ID.firebaseapp.com",
+            projectId: "あなたのPROJECT_ID",
+            storageBucket: "あなたのPROJECT_ID.appspot.com",
+            messagingSenderId: "あなたのSENDER_ID",
+            appId: "あなたのAPP_ID"
         };
         
-        const GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"; // Gemini APIキーをここに入力
+        // Firebase初期化
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        
+        const GEMINI_API_KEY = "ここにGeminiのAPIキーを入れてください";
         const appId = 'kii-ultimate-stable-workspace-v1';
-        // ----------------
 
-        // Firebase SDKの動的インポート（CDN用）
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-        import { getFirestore, collection, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
+        const { useState, useEffect, useMemo, useRef } = React;
 
         const App = () => {
             const [user, setUser] = useState(null);
             const [tasks, setTasks] = useState([]);
             const [userInput, setUserInput] = useState("");
             const [isProcessing, setIsProcessing] = useState(false);
-            const [notificationMsg, setNotificationMsg] = useState(null);
-            const [showSummary, setShowSummary] = useState(false);
-            const [advice, setAdvice] = useState("Kiiさん、タスクを分析して戦略を立てています...");
-            const [isGeneratingAdvice, setIsGeneratingAdvice] = useState(false);
-            
-            const [announcementTime, setAnnouncementTime] = useState("18:00");
-            const [isReminderActive, setIsReminderActive] = useState(true);
-            const [slackWebhookUrl, setSlackWebhookUrl] = useState("");
-            const [showSettings, setShowSettings] = useState(false);
-            const lastTriggeredRef = useRef(null);
+            const [advice, setAdvice] = useState("Kiiさん、戦略を立てています...");
 
+            // アイコンのレンダリング
             useEffect(() => {
-                signInAnonymously(auth).catch(err => console.error("Auth Error:", err));
-                const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+                lucide.createIcons();
+            }, [tasks, advice]);
+
+            // ログイン処理
+            useEffect(() => {
+                auth.signInAnonymously().catch(err => console.error("Auth Error:", err));
+                const unsubscribe = auth.onAuthStateChanged((currentUser) => {
                     setUser(currentUser);
                 });
                 return () => unsubscribe();
             }, []);
 
+            // データ購読
             useEffect(() => {
                 if (!user) return;
-                const tasksCollection = collection(db, 'artifacts', appId, 'users', user.uid, 'tasks');
-                const unsubscribeTasks = onSnapshot(tasksCollection, (snapshot) => {
-                    const tasksData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    setTasks(tasksData);
-                });
-
-                const settingsDoc = doc(db, 'artifacts', appId, 'users', user.uid, 'config', 'user_settings');
-                const unsubscribeSettings = onSnapshot(settingsDoc, (snapshot) => {
-                    if (snapshot.exists()) {
-                        const data = snapshot.data();
-                        if (data.announcementTime) setAnnouncementTime(data.announcementTime);
-                        if (data.isReminderActive !== undefined) setIsReminderActive(data.isReminderActive);
-                        if (data.slackWebhookUrl) setSlackWebhookUrl(data.slackWebhookUrl);
-                    }
-                });
-
-                return () => {
-                    unsubscribeTasks();
-                    unsubscribeSettings();
-                };
+                const unsubscribe = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks')
+                    .onSnapshot((snapshot) => {
+                        const tasksData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        setTasks(tasksData);
+                    });
+                return () => unsubscribe();
             }, [user]);
 
-            const extractUrl = (text) => {
-                if (!text || typeof text !== 'string') return null;
-                const urlRegex = /(https?:\/\/[^\s]+)/g;
-                const matches = text.match(urlRegex);
-                return matches ? matches[0] : null;
-            };
-
-            const generateEfficiencyAdvice = async (currentTasks) => {
-                const activeTasks = currentTasks.filter(t => !t.completed);
-                if (activeTasks.length === 0) {
-                    setAdvice("✅ Kiiさん、全ミッション完了です。明日のためにリラックスしましょう！");
-                    return;
-                }
-                setIsGeneratingAdvice(true);
-                
-                const systemPrompt = `あなたはKiiさんの専属秘書です。一瞬で把握できるよう、🎯最優先、🚀効率化、⚠️リスクの3項目でアドバイスして。各1行、計3行。`;
-
-                try {
-                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            contents: [{ parts: [{ text: `タスクリスト: ${JSON.stringify(activeTasks)}` }] }],
-                            systemInstruction: { parts: [{ text: systemPrompt }] }
-                        })
-                    });
-                    const data = await response.json();
-                    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-                    if (text) setAdvice(text.trim());
-                } catch (err) {
-                    console.error("Advice Error:", err);
-                } finally {
-                    setIsGeneratingAdvice(false);
-                }
-            };
-
-            useEffect(() => {
-                if (tasks.length > 0) {
-                    const timer = setTimeout(() => generateEfficiencyAdvice(tasks), 2000); 
-                    return () => clearTimeout(timer);
-                }
-            }, [tasks.length, tasks.filter(t => t.completed).length]);
-
-            const processMessageWithAI = async (message) => {
-                if (!message.trim() || !user) return;
+            // タスク追加
+            const handleAdd = async () => {
+                if (!userInput.trim() || !user) return;
                 setIsProcessing(true);
                 try {
-                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            contents: [{ parts: [{ text: message }] }],
-                            systemInstruction: { parts: [{ text: `タスク追加(add)・更新(update)を判断し、{"actions": [{"type": "add", "data": {"text": "...", "project": "..."}}]} のようなJSONで出力して。` }] },
-                            generationConfig: { responseMimeType: "application/json" }
-                        })
+                    await db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('tasks').add({
+                        text: userInput,
+                        completed: false,
+                        isToday: true,
+                        createdAt: new Date().toISOString()
                     });
-                    const data = await response.json();
-                    const result = JSON.parse(data.candidates[0].content.parts[0].text);
-                    const tasksCollection = collection(db, 'artifacts', appId, 'users', user.uid, 'tasks');
-                    if (result.actions) {
-                        for (const action of result.actions) {
-                            if (action.type === 'add') {
-                                await addDoc(tasksCollection, { ...action.data, completed: false, createdAt: new Date().toISOString() });
-                            }
-                        }
-                        triggerNotification("反映しました。");
-                    }
                     setUserInput("");
-                } catch (error) {
-                    triggerNotification("解析失敗。");
-                } finally {
-                    setIsProcessing(false);
-                }
+                } catch (e) { console.error(e); }
+                setIsProcessing(false);
             };
 
-            const triggerNotification = (msg) => {
-                setNotificationMsg(msg);
-                setTimeout(() => setNotificationMsg(null), 3000);
-            };
+            if (!user) return <div className="flex h-screen items-center justify-center font-bold">Connecting...</div>;
 
-            const toggleTask = async (task) => {
-                const taskDoc = doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', task.id);
-                await updateDoc(taskDoc, { completed: !task.completed });
-            };
-
-            const deleteTask = async (id) => {
-                const taskDoc = doc(db, 'artifacts', appId, 'users', user.uid, 'tasks', id);
-                await deleteDoc(taskDoc);
-            };
-
-            const processedData = useMemo(() => {
-                const today = tasks.filter(t => t.isToday && !t.completed);
-                const projects = tasks.reduce((acc, task) => {
-                    const p = task.project || 'その他';
-                    if (!acc[p]) acc[p] = [];
-                    acc[p].push(task);
-                    return acc;
-                }, {});
-                return { today, projects };
-            }, [tasks]);
-
-            const copyToClipboard = (text) => {
-                navigator.clipboard.writeText(text);
-                triggerNotification("コピーしました。");
-            };
-
-            // JSX UI (デザインを維持)
             return (
-                <div className="min-h-screen bg-[#F8FAFC] p-4 md:p-8 pb-32 font-sans text-slate-900">
-                    <style>{`
-                        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&display=swap');
-                        body { font-family: 'Noto Sans JP', sans-serif; }
-                    `}</style>
-                    
-                    {notificationMsg && (
-                        <div className="fixed top-6 right-6 bg-slate-900 text-white px-6 py-3 rounded-2xl shadow-xl z-[100] flex items-center gap-3">
-                            <Zap size={16} className="text-yellow-400" />
-                            <span className="font-bold text-xs">{notificationMsg}</span>
-                        </div>
-                    )}
-
+                <div className="min-h-screen bg-[#F8FAFC] p-4 md:p-8">
                     <div className="max-w-3xl mx-auto">
-                        <header className="flex justify-between items-center mb-8">
-                            <h1 className="text-2xl font-black italic">Kii's <span className="text-indigo-600">Secretary</span></h1>
-                            <button onClick={() => setShowSettings(true)} className="p-2 border rounded-xl bg-white"><Settings size={20} /></button>
+                        <header className="mb-8">
+                            <h1 className="text-2xl font-black text-slate-900">Kii's <span className="text-indigo-600">Secretary</span></h1>
                         </header>
 
                         <div className="bg-indigo-600 rounded-[32px] p-8 mb-10 text-white shadow-xl">
-                            <div className="text-[10px] font-bold opacity-70 mb-4 uppercase tracking-widest">Strategy Advice</div>
-                            <div className="space-y-2 text-lg font-bold whitespace-pre-wrap">
-                                {isGeneratingAdvice ? "分析中..." : advice}
+                            <div className="flex items-center gap-2 mb-2 opacity-70">
+                                <i data-lucide="lightbulb" className="w-4 h-4"></i>
+                                <span className="text-[10px] font-bold uppercase tracking-widest">Advice</span>
                             </div>
+                            <p className="text-lg font-bold">{advice}</p>
                         </div>
 
-                        <div className="bg-white rounded-[32px] p-8 mb-16 shadow-sm border border-slate-100">
-                            <textarea 
+                        <div className="bg-white rounded-[32px] p-6 mb-8 shadow-sm border border-slate-100 flex gap-4">
+                            <input 
                                 value={userInput}
                                 onChange={(e) => setUserInput(e.target.value)}
-                                className="w-full h-24 text-lg outline-none resize-none"
-                                placeholder="タスクを入力..."
+                                className="flex-1 text-lg outline-none"
+                                placeholder="新しいタスクを入力..."
                             />
-                            <div className="flex justify-end mt-4">
-                                <button onClick={() => processMessageWithAI(userInput)} className="bg-slate-900 text-white px-8 py-2 rounded-2xl font-bold">
-                                    {isProcessing ? "実行中..." : "反映する"}
-                                </button>
-                            </div>
+                            <button onClick={handleAdd} className="bg-indigo-600 text-white px-6 py-2 rounded-2xl font-bold">
+                                {isProcessing ? "..." : "追加"}
+                            </button>
                         </div>
 
-                        <h2 className="text-xl font-black mb-6">TODAY'S TASKS</h2>
                         <div className="space-y-4">
                             {tasks.map(task => (
-                                <div key={task.id} className="flex items-center gap-4 p-4 bg-white rounded-2xl border">
-                                    <button onClick={() => toggleTask(task)}>
-                                        {task.completed ? <CheckCircle2 className="text-emerald-500" /> : <Circle className="text-slate-300" />}
-                                    </button>
-                                    <span className={`flex-1 font-bold ${task.completed ? 'line-through text-slate-400' : ''}`}>
-                                        {task.text}
-                                    </span>
-                                    <button onClick={() => deleteTask(task.id)} className="text-slate-300 hover:text-red-500">
-                                        <Trash2 size={18} />
-                                    </button>
+                                <div key={task.id} className="flex items-center gap-4 p-4 bg-white rounded-2xl border border-slate-100">
+                                    <div className="flex-1 font-bold text-slate-800">{task.text}</div>
+                                    <i data-lucide="check-circle-2" className="text-slate-200 cursor-pointer hover:text-indigo-500"></i>
                                 </div>
                             ))}
                         </div>
